@@ -1,0 +1,4 @@
+name: zmk-tincan
+build:
+  cmake: .
+  kconfig: Kconfig

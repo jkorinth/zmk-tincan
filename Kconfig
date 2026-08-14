@@ -1,0 +1,9 @@
+menuconfig ZMK_TINCAN
+	bool "Central-peripheral communication via custom GATT server on peripheral side."
+	select BLE
+	default n
+
+
+if ZMK_TINCAN
+
+endif # ZMK_TINCAN
