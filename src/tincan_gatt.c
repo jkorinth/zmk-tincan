@@ -1,0 +1,58 @@
+#include <stddef.h>
+#include <stdint.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/logging/log.h>
+#include "tincan_gatt.h"
+
+LOG_MODULE_REGISTER(tincan_gatt, CONFIG_ZMK_LOG_LEVEL);
+
+static bool notify_enabled;
+
+/* Called whenever the central writes to our characteristic */
+static ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
+                        uint16_t len, uint16_t offset, uint8_t flags) {
+    /* For now: just hand raw bytes off. This is where nanopb decode goes. */
+    LOG_INF("received messsage from central: 0x%02x%02x", ((const uint8_t *)buf)[0],
+            ((const uint8_t *)buf)[1]);
+    return len;
+}
+
+/* Called when the central subscribes/unsubscribes (writes the CCCD) */
+static void on_ccc_change(const struct bt_gatt_attr *attr, uint16_t value) {
+    notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+}
+
+BT_GATT_SERVICE_DEFINE(tincan_svc, BT_GATT_PRIMARY_SERVICE(BT_UUID_TINCAN_SERVICE),
+                       BT_GATT_CHARACTERISTIC(BT_UUID_TINCAN_CHAR,
+                                              BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+                                              BT_GATT_PERM_WRITE, NULL, on_write, NULL),
+                       BT_GATT_CCC(on_ccc_change, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), );
+
+int tincan_send(struct bt_conn *conn, const uint8_t *data, uint16_t len) {
+    if (!notify_enabled) {
+        return -EACCES; /* central hasn't subscribed yet */
+    }
+    return bt_gatt_notify(conn, &tincan_svc.attrs[1], data, len);
+}
+
+static void heartbeat_handler(struct k_work_delayable *work) {
+    LOG_INF("heartbeat!");
+    LOG_INF("tincan service registered, %d attrs, char uuid in db", tincan_svc.attr_count);
+    char uuid_str[BT_UUID_STR_LEN];
+    bt_uuid_to_str(BT_UUID_TINCAN_CHAR, uuid_str, sizeof(uuid_str));
+    LOG_INF("expecting char uuid: %s", uuid_str);
+    k_work_schedule(work, K_SECONDS(5));
+}
+
+K_WORK_DELAYABLE_DEFINE(heartbeat, heartbeat_handler);
+
+static int tincan_gatt_init(void) {
+    LOG_INF("tincan service registered, %d attrs, char uuid in db", tincan_svc.attr_count);
+    char uuid_str[BT_UUID_STR_LEN];
+    bt_uuid_to_str(BT_UUID_TINCAN_CHAR, uuid_str, sizeof(uuid_str));
+    LOG_INF("expecting char uuid: %s", uuid_str);
+    k_work_schedule(&heartbeat, K_SECONDS(5));
+    return 0;
+}
+SYS_INIT(tincan_gatt_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
