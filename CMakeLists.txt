@@ -1,5 +1,6 @@
 if(CONFIG_ZMK_TINCAN)
 	zephyr_library()
+	zephyr_include_directories(include)
 	zephyr_library_include_directories(include)
 	if (CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 		zephyr_library_sources(src/tincan_central.c)
