@@ -1,8 +1,11 @@
+#include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/hci.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
 #include <tincan/tincan.h>
@@ -20,6 +23,76 @@ static struct tincan_t {
 	uint16_t handle_char, handle_ccc;
 	uint16_t mtu;
 } _tincan;
+
+#define TINCAN_MSG_MAX_LEN 128
+#define TINCAN_TX_QUEUE_DEPTH 8
+
+struct tincan_msg {
+    uint8_t data[TINCAN_MSG_MAX_LEN];
+    size_t len;
+};
+
+K_MSGQ_DEFINE(tincan_tx_q, sizeof(struct tincan_msg), TINCAN_TX_QUEUE_DEPTH, 4);
+
+static struct bt_gatt_write_params tincan_write_params;
+static struct tincan_msg tincan_tx_current;
+static bool tincan_tx_busy;
+
+static void tincan_tx_work_handler(struct k_work *work);
+K_WORK_DEFINE(tincan_tx_work, tincan_tx_work_handler);
+
+static void tincan_on_response(struct bt_conn *conn, uint8_t err, struct bt_gatt_write_params *params)
+{
+	if (err) {
+		LOG_ERR("%s: write failed: %s (%d)", __func__, bt_gatt_err_to_str(err), err);
+	}
+	LOG_DBG("%s: write successful", __func__);
+	tincan_tx_busy = false;
+	k_work_submit(&tincan_tx_work); // send the next queued message, if any
+}
+
+static void tincan_tx_work_handler(struct k_work *work) {
+    if (tincan_tx_busy || !_tincan.conn || !_tincan.handle_char) {
+        return; // a write is in flight, or the link isn't ready yet — retried
+                // from tincan_on_response() / once discovery completes
+    }
+    if (k_msgq_get(&tincan_tx_q, &tincan_tx_current, K_NO_WAIT) != 0) {
+        return; // queue empty
+    }
+
+    tincan_write_params.data = tincan_tx_current.data;
+    tincan_write_params.length = tincan_tx_current.len;
+    tincan_write_params.handle = _tincan.handle_char;
+    tincan_write_params.func = tincan_on_response;
+    tincan_write_params.offset = 0;
+
+    tincan_tx_busy = true;
+    int ret = bt_gatt_write(_tincan.conn, &tincan_write_params);
+    if (ret) {
+        LOG_ERR("bt_gatt_write failed (%d), dropping queued message", ret);
+        tincan_tx_busy = false;
+        k_work_submit(&tincan_tx_work); // try the next one
+    }
+}
+
+int tincan_speak(const void *payload, size_t length) {
+    if (length > TINCAN_MSG_MAX_LEN) {
+        LOG_ERR("payload too large (%u > %u)", length, TINCAN_MSG_MAX_LEN);
+        return -EMSGSIZE;
+    }
+
+    struct tincan_msg msg = {.len = length};
+    memcpy(msg.data, payload, length);
+
+    int ret = k_msgq_put(&tincan_tx_q, &msg, K_NO_WAIT);
+    if (ret) {
+        LOG_ERR("tincan tx queue full, dropping message (%d)", ret);
+        return ret;
+    }
+
+    k_work_submit(&tincan_tx_work);
+    return 0;
+}
 
 static void tincan_exchange_func(struct bt_conn *conn, uint8_t err,
                                  struct bt_gatt_exchange_params *params) {
@@ -90,6 +163,7 @@ static uint8_t tincan_discover_ccc_cb(struct bt_conn *conn, const struct bt_gatt
         LOG_ERR("subscribe failed (%d)", err);
     } else {
         LOG_INF("subscribe success!");
+        k_work_submit(&tincan_tx_work);
 #ifdef ZMK_TINCAN_DEBUG_SEND
         k_work_schedule(&debug_send_work, K_SECONDS(1));
 #endif
@@ -204,6 +278,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     }
     LOG_INF("disconnected, reason %s (%d): , resetting conn", bt_hci_err_to_str(reason), reason);
     _tincan.conn = NULL;
+    _tincan.handle_char = 0;
+    tincan_tx_busy = false;
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -212,29 +288,3 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 };
 
 size_t tincan_mtu_size(void) { return _tincan.mtu; }
-
-static void tincan_on_response(struct bt_conn *conn, uint8_t err, struct bt_gatt_write_params *params)
-{
-	if (err) {
-		LOG_ERR("%s: write failed: %s (%d)", __func__, bt_gatt_err_to_str(err), err);
-	}
-	LOG_DBG("%s: write successful", __func__);
-}
-
-int tincan_speak(const void *payload, size_t length) {
-    static struct bt_gatt_write_params params;
-
-    if (_tincan.conn) {
-        LOG_INF("writing %u bytes payload to peripheral", length);
-	LOG_DBG("  hex: 0x%02x%02x", ((uint8_t *)payload)[0], ((uint8_t *)payload)[1]);
-        params.data = payload;
-        params.length = length;
-        params.handle = _tincan.handle_char;
-        params.func = tincan_on_response;
-        params.offset = 0;
-        return bt_gatt_write(_tincan.conn, &params);
-    } else {
-        LOG_ERR("no connection to peripheral, skipping write");
-    }
-    return -EAGAIN;
-}
