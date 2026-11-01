@@ -28,6 +28,8 @@
               pkgs.clang-tools
               pkgs.markdownlint-cli2
               pkgs.nixfmt
+              pkgs.gcc
+              pkgs.theft
             ];
           };
         }
@@ -56,6 +58,19 @@
             nixfmt --check ${nixSources}
             touch $out
           '';
+          frame-test =
+            pkgs.runCommand "frame-test"
+              {
+                nativeBuildInputs = [
+                  pkgs.gcc
+                  pkgs.theft
+                ];
+              }
+              ''
+                gcc -std=c11 -Wall -Wextra -Werror -o frame_test ${self}/tests/test_tincan_frame.c ${self}/src/tincan_frame.c -ltheft -lm
+                ./frame_test
+                touch $out
+              '';
         }
       );
     };

@@ -1,10 +1,12 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <zephyr/bluetooth/att.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/logging/log.h>
 #include <tincan/tincan.h>
+#include "tincan_frame.h"
 #include "tincan_gatt.h"
 
 // #define ZMK_TINCAN_PERIPHERAL_HEARTBEAT
@@ -23,12 +25,19 @@ void tincan_listen(tincan_cb_t cb) {
 
 static bool notify_enabled;
 
+static uint8_t tincan_rx_asm_buf[TINCAN_FRAME_MAX_MSG_LEN];
+static size_t tincan_rx_asm_len;
+
 static ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
                         uint16_t len, uint16_t offset, uint8_t flags) {
-    LOG_DBG("received messsage from central: 0x%02x%02x", ((const uint8_t *)buf)[0],
-            ((const uint8_t *)buf)[1]);
-    if (_tincan.cb) {
-        _tincan.cb(buf, len);
+    // shortcut: a peer that aborts mid-message leaves this stuck assembling
+    // until the next message or a disconnect resets it (see tincan_frame.h).
+    int ret = tincan_frame_reassemble(buf, len, tincan_rx_asm_buf, sizeof(tincan_rx_asm_buf),
+                                      &tincan_rx_asm_len);
+    if (ret == -2) {
+        LOG_ERR("frame reassembly error, dropping message");
+    } else if (ret >= 0 && _tincan.cb) {
+        _tincan.cb(tincan_rx_asm_buf, ret);
     }
     return len;
 }
@@ -47,7 +56,34 @@ int tincan_speak(const void *payload, size_t length) {
     if (!_tincan.conn || !notify_enabled) {
         return -EACCES;
     }
-    return bt_gatt_notify(_tincan.conn, &tincan_svc.attrs[1], payload, length);
+    if (length > TINCAN_FRAME_MAX_MSG_LEN) {
+        LOG_ERR("payload too large (%u > %u)", length, TINCAN_FRAME_MAX_MSG_LEN);
+        return -EMSGSIZE;
+    }
+
+    uint16_t mtu = bt_gatt_get_mtu(_tincan.conn);
+    if (!mtu) {
+        mtu = BT_ATT_DEFAULT_LE_MTU;
+    }
+    size_t max_chunk_payload = mtu - 3 - TINCAN_FRAME_HDR_LEN;
+
+    uint8_t frame[TINCAN_FRAME_HDR_LEN + TINCAN_FRAME_MAX_MSG_LEN];
+    size_t offset = 0;
+    bool more;
+    do {
+        int n = tincan_frame_write_chunk(payload, length, &offset, max_chunk_payload, frame,
+                                         sizeof(frame), &more);
+        if (n < 0) {
+            LOG_ERR("frame too large for current MTU");
+            return -EMSGSIZE;
+        }
+        int err = bt_gatt_notify(_tincan.conn, &tincan_svc.attrs[1], frame, n);
+        if (err) {
+            LOG_ERR("notify failed mid-message (%d)", err);
+            return err;
+        }
+    } while (more);
+    return 0;
 }
 
 size_t tincan_mtu_size(void) { return _tincan.conn ? bt_gatt_get_mtu(_tincan.conn) : 0; }
@@ -74,6 +110,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     }
     LOG_INF("disconnected, reason %s (%d)", bt_hci_err_to_str(reason), reason);
     _tincan.conn = NULL;
+    tincan_rx_asm_len = 0;
 }
 
 BT_CONN_CB_DEFINE(tincan_gatt_conn_callbacks) = {

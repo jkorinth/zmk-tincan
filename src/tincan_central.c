@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <zephyr/bluetooth/att.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -9,6 +10,7 @@
 #include <zephyr/logging/log.h>
 
 #include <tincan/tincan.h>
+#include "tincan_frame.h"
 #include "tincan_gatt.h"
 
 // #define ZMK_TINCAN_DEBUG_SEND
@@ -30,11 +32,10 @@ void tincan_listen(tincan_cb_t cb) {
     LOG_INF("callback registered");
 }
 
-#define TINCAN_MSG_MAX_LEN 128
 #define TINCAN_TX_QUEUE_DEPTH 8
 
 struct tincan_msg {
-    uint8_t data[TINCAN_MSG_MAX_LEN];
+    uint8_t data[TINCAN_FRAME_MAX_MSG_LEN];
     size_t len;
 };
 
@@ -43,6 +44,12 @@ K_MSGQ_DEFINE(tincan_tx_q, sizeof(struct tincan_msg), TINCAN_TX_QUEUE_DEPTH, 4);
 static struct bt_gatt_write_params tincan_write_params;
 static struct tincan_msg tincan_tx_current;
 static bool tincan_tx_busy;
+static bool tincan_tx_in_progress;
+static size_t tincan_tx_offset;
+static uint8_t tincan_tx_frame[TINCAN_FRAME_HDR_LEN + TINCAN_FRAME_MAX_MSG_LEN];
+
+static uint8_t tincan_rx_asm_buf[TINCAN_FRAME_MAX_MSG_LEN];
+static size_t tincan_rx_asm_len;
 
 static void tincan_tx_work_handler(struct k_work *work);
 K_WORK_DEFINE(tincan_tx_work, tincan_tx_work_handler);
@@ -62,12 +69,30 @@ static void tincan_tx_work_handler(struct k_work *work) {
         return; // a write is in flight, or the link isn't ready yet — retried
                 // from tincan_on_response() / once discovery completes
     }
-    if (k_msgq_get(&tincan_tx_q, &tincan_tx_current, K_NO_WAIT) != 0) {
-        return; // queue empty
+    if (!tincan_tx_in_progress) {
+        if (k_msgq_get(&tincan_tx_q, &tincan_tx_current, K_NO_WAIT) != 0) {
+            return; // queue empty
+        }
+        tincan_tx_offset = 0;
+        tincan_tx_in_progress = true;
     }
 
-    tincan_write_params.data = tincan_tx_current.data;
-    tincan_write_params.length = tincan_tx_current.len;
+    uint16_t mtu = _tincan.mtu ? _tincan.mtu : BT_ATT_DEFAULT_LE_MTU;
+    size_t max_chunk_payload = mtu - 3 - TINCAN_FRAME_HDR_LEN;
+    bool more;
+    int n = tincan_frame_write_chunk(tincan_tx_current.data, tincan_tx_current.len,
+                                     &tincan_tx_offset, max_chunk_payload, tincan_tx_frame,
+                                     sizeof(tincan_tx_frame), &more);
+    if (n < 0) {
+        LOG_ERR("frame too large for current MTU, dropping message");
+        tincan_tx_in_progress = false;
+        k_work_submit(&tincan_tx_work);
+        return;
+    }
+    tincan_tx_in_progress = more;
+
+    tincan_write_params.data = tincan_tx_frame;
+    tincan_write_params.length = n;
     tincan_write_params.handle = _tincan.handle_char;
     tincan_write_params.func = tincan_on_response;
     tincan_write_params.offset = 0;
@@ -77,13 +102,17 @@ static void tincan_tx_work_handler(struct k_work *work) {
     if (ret) {
         LOG_ERR("bt_gatt_write failed (%d), dropping queued message", ret);
         tincan_tx_busy = false;
+        // shortcut: abandons mid-message fragments; the peer's reassembly
+        // buffer is left waiting for a fragment that never arrives, until
+        // the next message or a disconnect resets it (see tincan_frame.h).
+        tincan_tx_in_progress = false;
         k_work_submit(&tincan_tx_work); // try the next one
     }
 }
 
 int tincan_speak(const void *payload, size_t length) {
-    if (length > TINCAN_MSG_MAX_LEN) {
-        LOG_ERR("payload too large (%u > %u)", length, TINCAN_MSG_MAX_LEN);
+    if (length > TINCAN_FRAME_MAX_MSG_LEN) {
+        LOG_ERR("payload too large (%u > %u)", length, TINCAN_FRAME_MAX_MSG_LEN);
         return -EMSGSIZE;
     }
 
@@ -146,8 +175,14 @@ static uint8_t tincan_on_notify(struct bt_conn *conn, struct bt_gatt_subscribe_p
         return BT_GATT_ITER_STOP;
     }
     LOG_DBG("%s: on_notify called: %u bytes data", __func__, length);
-    if (_tincan.cb) {
-        _tincan.cb(data, length);
+    // shortcut: a peer that aborts mid-message leaves this stuck assembling
+    // until the next message or a disconnect resets it (see tincan_frame.h).
+    int ret = tincan_frame_reassemble(data, length, tincan_rx_asm_buf, sizeof(tincan_rx_asm_buf),
+                                      &tincan_rx_asm_len);
+    if (ret == -2) {
+        LOG_ERR("frame reassembly error, dropping message");
+    } else if (ret >= 0 && _tincan.cb) {
+        _tincan.cb(tincan_rx_asm_buf, ret);
     }
     return BT_GATT_ITER_CONTINUE;
 }
@@ -289,6 +324,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     _tincan.conn = NULL;
     _tincan.handle_char = 0;
     tincan_tx_busy = false;
+    tincan_tx_in_progress = false;
+    tincan_rx_asm_len = 0;
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
