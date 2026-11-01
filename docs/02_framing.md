@@ -16,7 +16,7 @@ protocols.
 
 KISS - Header byte per ATT packet:
 
-```
+```text
 bit 7    bit 6..0
 More?    reserved
 [hdr u8][payload ...]       # payload <= ATT_MTU - 3 - 1
