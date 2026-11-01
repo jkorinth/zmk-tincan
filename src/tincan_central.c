@@ -22,7 +22,13 @@ static struct tincan_t {
     struct bt_gatt_exchange_params exc_params;
     uint16_t handle_char, handle_ccc;
     uint16_t mtu;
+    tincan_cb_t cb;
 } _tincan;
+
+void tincan_listen(tincan_cb_t cb) {
+    _tincan.cb = cb;
+    LOG_INF("callback registered");
+}
 
 #define TINCAN_MSG_MAX_LEN 128
 #define TINCAN_TX_QUEUE_DEPTH 8
@@ -139,7 +145,10 @@ static uint8_t tincan_on_notify(struct bt_conn *conn, struct bt_gatt_subscribe_p
         LOG_INF("%s: unsubscribed", __func__);
         return BT_GATT_ITER_STOP;
     }
-    LOG_INF("%s: on_notify called: %u bytes data", __func__, length);
+    LOG_DBG("%s: on_notify called: %u bytes data", __func__, length);
+    if (_tincan.cb) {
+        _tincan.cb(data, length);
+    }
     return BT_GATT_ITER_CONTINUE;
 }
 
