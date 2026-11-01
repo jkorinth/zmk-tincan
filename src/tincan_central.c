@@ -10,8 +10,10 @@
 #include <zephyr/logging/log.h>
 
 #include <tincan/tincan.h>
+#include "tincan_dispatch.h"
 #include "tincan_frame.h"
 #include "tincan_gatt.h"
+#include "tincan_hello.h"
 
 // #define ZMK_TINCAN_DEBUG_SEND
 
@@ -24,22 +26,15 @@ static struct tincan_t {
     struct bt_gatt_exchange_params exc_params;
     uint16_t handle_char, handle_ccc;
     uint16_t mtu;
-    tincan_cb_t cb;
 } _tincan;
 
-void tincan_listen(tincan_cb_t cb) {
-    _tincan.cb = cb;
-    LOG_INF("callback registered");
-}
-
-#define TINCAN_TX_QUEUE_DEPTH 8
-
 struct tincan_msg {
+    uint8_t channel;
     uint8_t data[TINCAN_FRAME_MAX_MSG_LEN];
     size_t len;
 };
 
-K_MSGQ_DEFINE(tincan_tx_q, sizeof(struct tincan_msg), TINCAN_TX_QUEUE_DEPTH, 4);
+K_MSGQ_DEFINE(tincan_tx_q, sizeof(struct tincan_msg), CONFIG_ZMK_TINCAN_TX_QUEUE_DEPTH, 4);
 
 static struct bt_gatt_write_params tincan_write_params;
 static struct tincan_msg tincan_tx_current;
@@ -50,6 +45,10 @@ static uint8_t tincan_tx_frame[TINCAN_FRAME_HDR_LEN + TINCAN_FRAME_MAX_MSG_LEN];
 
 static uint8_t tincan_rx_asm_buf[TINCAN_FRAME_MAX_MSG_LEN];
 static size_t tincan_rx_asm_len;
+
+static bool tincan_hello_sent;
+static bool tincan_peer_ready;
+static uint16_t tincan_peer_max_msg;
 
 static void tincan_tx_work_handler(struct k_work *work);
 K_WORK_DEFINE(tincan_tx_work, tincan_tx_work_handler);
@@ -70,9 +69,14 @@ static void tincan_tx_work_handler(struct k_work *work) {
                 // from tincan_on_response() / once discovery completes
     }
     if (!tincan_tx_in_progress) {
-        if (k_msgq_get(&tincan_tx_q, &tincan_tx_current, K_NO_WAIT) != 0) {
+        struct tincan_msg peeked;
+        if (k_msgq_peek(&tincan_tx_q, &peeked) != 0) {
             return; // queue empty
         }
+        if (peeked.channel != TINCAN_CHANNEL_CONTROL && !tincan_peer_ready) {
+            return; // queue messages until the peer's HELLO arrives
+        }
+        k_msgq_get(&tincan_tx_q, &tincan_tx_current, K_NO_WAIT);
         tincan_tx_offset = 0;
         tincan_tx_in_progress = true;
     }
@@ -80,9 +84,9 @@ static void tincan_tx_work_handler(struct k_work *work) {
     uint16_t mtu = _tincan.mtu ? _tincan.mtu : BT_ATT_DEFAULT_LE_MTU;
     size_t max_chunk_payload = mtu - 3 - TINCAN_FRAME_HDR_LEN;
     bool more;
-    int n = tincan_frame_write_chunk(tincan_tx_current.data, tincan_tx_current.len,
-                                     &tincan_tx_offset, max_chunk_payload, tincan_tx_frame,
-                                     sizeof(tincan_tx_frame), &more);
+    int n = tincan_frame_write_chunk(tincan_tx_current.channel, tincan_tx_current.data,
+                                     tincan_tx_current.len, &tincan_tx_offset, max_chunk_payload,
+                                     tincan_tx_frame, sizeof(tincan_tx_frame), &more);
     if (n < 0) {
         LOG_ERR("frame too large for current MTU, dropping message");
         tincan_tx_in_progress = false;
@@ -110,13 +114,20 @@ static void tincan_tx_work_handler(struct k_work *work) {
     }
 }
 
-int tincan_speak(const void *payload, size_t length) {
+int tincan_speak(uint8_t channel, const void *payload, size_t length) {
+    if (channel > TINCAN_CHANNEL_MAX) {
+        return -EINVAL;
+    }
     if (length > TINCAN_FRAME_MAX_MSG_LEN) {
         LOG_ERR("payload too large (%u > %u)", length, TINCAN_FRAME_MAX_MSG_LEN);
         return -EMSGSIZE;
     }
+    if (tincan_peer_ready && length > tincan_peer_max_msg) {
+        LOG_ERR("payload too large for peer (%u > %u)", length, tincan_peer_max_msg);
+        return -EMSGSIZE;
+    }
 
-    struct tincan_msg msg = {.len = length};
+    struct tincan_msg msg = {.channel = channel, .len = length};
     memcpy(msg.data, payload, length);
 
     int ret = k_msgq_put(&tincan_tx_q, &msg, K_NO_WAIT);
@@ -159,7 +170,7 @@ static void debug_send_work_handler(struct k_work *work) {
 
     if (_tincan.conn) {
         LOG_INF("writing payload to peripheral");
-        int ret = tincan_speak(payload, sizeof(payload));
+        int ret = tincan_speak(1, payload, sizeof(payload));
         LOG_INF("wrote payload: %d", ret);
     } else {
         LOG_INF("no connection to peripheral, skipping write");
@@ -175,17 +186,25 @@ static uint8_t tincan_on_notify(struct bt_conn *conn, struct bt_gatt_subscribe_p
         return BT_GATT_ITER_STOP;
     }
     LOG_DBG("%s: on_notify called: %u bytes data", __func__, length);
-    if (!_tincan.cb) {
-        return BT_GATT_ITER_CONTINUE; // nobody's listening, skip reassembling
-    }
     // shortcut: a peer that aborts mid-message leaves this stuck assembling
     // until the next message or a disconnect resets it (see tincan_frame.h).
+    uint8_t channel;
     int ret = tincan_frame_reassemble(data, length, tincan_rx_asm_buf, sizeof(tincan_rx_asm_buf),
-                                      &tincan_rx_asm_len);
+                                      &tincan_rx_asm_len, &channel);
     if (ret == TINCAN_FRAME_ERROR) {
         LOG_ERR("frame reassembly error, dropping message");
+    } else if (ret >= 0 && channel == TINCAN_CHANNEL_CONTROL) {
+        struct tincan_hello hello;
+        if (tincan_hello_decode(tincan_rx_asm_buf, ret, &hello) == 0 &&
+            hello.version == TINCAN_PROTO_VERSION) {
+            tincan_peer_ready = true;
+            tincan_peer_max_msg = hello.max_msg;
+            k_work_submit(&tincan_tx_work); // resume draining now the peer's ready
+        } else {
+            LOG_ERR("HELLO version mismatch or malformed, peer not ready");
+        }
     } else if (ret >= 0) {
-        _tincan.cb(tincan_rx_asm_buf, ret);
+        tincan_dispatch(channel, tincan_rx_asm_buf, ret);
     }
     return BT_GATT_ITER_CONTINUE;
 }
@@ -210,6 +229,12 @@ static uint8_t tincan_discover_ccc_cb(struct bt_conn *conn, const struct bt_gatt
         LOG_ERR("subscribe failed (%d)", err);
     } else {
         LOG_INF("subscribe success!");
+        if (!tincan_hello_sent) {
+            uint8_t hello[TINCAN_HELLO_LEN];
+            int n = tincan_hello_encode(TINCAN_FRAME_MAX_MSG_LEN, hello, sizeof(hello));
+            tincan_speak(TINCAN_CHANNEL_CONTROL, hello, n);
+            tincan_hello_sent = true;
+        }
         k_work_submit(&tincan_tx_work);
 #ifdef ZMK_TINCAN_DEBUG_SEND
         k_work_schedule(&debug_send_work, K_SECONDS(1));
@@ -329,6 +354,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     tincan_tx_busy = false;
     tincan_tx_in_progress = false;
     tincan_rx_asm_len = 0;
+    tincan_hello_sent = false;
+    tincan_peer_ready = false;
+    tincan_peer_max_msg = 0;
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
