@@ -10,4 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - run: nix flake check -L
+      - run: nix build '.#checks.x86_64-linux.clang-format' '.#checks.x86_64-linux.markdownlint' '.#checks.x86_64-linux.nixfmt' -L
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix build '.#checks.x86_64-linux.frame-test' -L

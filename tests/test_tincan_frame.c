@@ -1,0 +1,139 @@
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <theft.h>
+
+#include "../src/tincan_frame.h"
+
+struct gen_msg {
+    uint8_t data[TINCAN_FRAME_MAX_MSG_LEN];
+    size_t len;
+};
+
+struct gen_chunk {
+    size_t max_chunk_payload;
+};
+
+static enum theft_alloc_res alloc_msg(struct theft *t, void *env, void **output) {
+    (void)env;
+    struct gen_msg *m = malloc(sizeof(*m));
+    if (!m) {
+        return THEFT_ALLOC_ERROR;
+    }
+    m->len = (size_t)(theft_random_bits(t, 8) % (TINCAN_FRAME_MAX_MSG_LEN + 1));
+    for (size_t i = 0; i < m->len; i++) {
+        m->data[i] = (uint8_t)theft_random_bits(t, 8);
+    }
+    *output = m;
+    return THEFT_ALLOC_OK;
+}
+
+static enum theft_alloc_res alloc_chunk(struct theft *t, void *env, void **output) {
+    (void)env;
+    struct gen_chunk *c = malloc(sizeof(*c));
+    if (!c) {
+        return THEFT_ALLOC_ERROR;
+    }
+    c->max_chunk_payload = 1 + (size_t)(theft_random_bits(t, 8) % TINCAN_FRAME_MAX_MSG_LEN);
+    *output = c;
+    return THEFT_ALLOC_OK;
+}
+
+static void free_cb(void *instance, void *env) {
+    (void)env;
+    free(instance);
+}
+
+// Property: splitting a message into frames and reassembling them always
+// reconstructs the exact original bytes, with only the final frame
+// reporting completion.
+static enum theft_trial_res prop_roundtrip(struct theft *t, void *arg1, void *arg2) {
+    (void)t;
+    const struct gen_msg *m = arg1;
+    const struct gen_chunk *c = arg2;
+
+    uint8_t frame[TINCAN_FRAME_HDR_LEN + TINCAN_FRAME_MAX_MSG_LEN];
+    uint8_t asm_buf[TINCAN_FRAME_MAX_MSG_LEN];
+    size_t asm_len = 0;
+    size_t offset = 0;
+    bool more;
+    int done;
+
+    do {
+        int n = tincan_frame_write_chunk(m->data, m->len, &offset, c->max_chunk_payload, frame,
+                                         sizeof(frame), &more);
+        if (n < 0) {
+            return THEFT_TRIAL_FAIL;
+        }
+        done = tincan_frame_reassemble(frame, (uint16_t)n, asm_buf, sizeof(asm_buf), &asm_len);
+        if (more && done != -1) {
+            return THEFT_TRIAL_FAIL; // completed too early
+        }
+        if (!more && done < 0) {
+            return THEFT_TRIAL_FAIL; // final frame should always complete
+        }
+    } while (more);
+
+    if ((size_t)done != m->len) {
+        return THEFT_TRIAL_FAIL;
+    }
+    if (done > 0 && memcmp(asm_buf, m->data, (size_t)done) != 0) {
+        return THEFT_TRIAL_FAIL;
+    }
+    return THEFT_TRIAL_PASS;
+}
+
+static void test_empty_message_roundtrip(void) {
+    uint8_t frame[TINCAN_FRAME_HDR_LEN + 4];
+    size_t offset = 0;
+    bool more;
+    int n = tincan_frame_write_chunk(NULL, 0, &offset, 4, frame, sizeof(frame), &more);
+    assert(n == TINCAN_FRAME_HDR_LEN);
+    assert(!more);
+
+    uint8_t asm_buf[8];
+    size_t asm_len = 0;
+    int done = tincan_frame_reassemble(frame, (uint16_t)n, asm_buf, sizeof(asm_buf), &asm_len);
+    assert(done == 0);
+}
+
+static void test_reassembly_overflow(void) {
+    uint8_t asm_buf[4];
+    size_t asm_len = 0;
+    uint8_t frame1[1 + 4] = {TINCAN_FRAME_MORE_FLAG, 1, 2, 3, 4};
+    int r1 = tincan_frame_reassemble(frame1, sizeof(frame1), asm_buf, sizeof(asm_buf), &asm_len);
+    assert(r1 == -1);
+
+    uint8_t frame2[1 + 1] = {0, 5}; // would push asm_len to 5 > cap 4
+    int r2 = tincan_frame_reassemble(frame2, sizeof(frame2), asm_buf, sizeof(asm_buf), &asm_len);
+    assert(r2 == -2);
+    assert(asm_len == 0);
+}
+
+static void test_writer_out_cap_too_small(void) {
+    uint8_t msg[4] = {1, 2, 3, 4};
+    size_t offset = 0;
+    bool more;
+    int n = tincan_frame_write_chunk(msg, sizeof(msg), &offset, 4, NULL, 0, &more);
+    assert(n == -1);
+}
+
+int main(void) {
+    test_empty_message_roundtrip();
+    test_reassembly_overflow();
+    test_writer_out_cap_too_small();
+
+    struct theft_type_info msg_info = {.alloc = alloc_msg, .free = free_cb};
+    struct theft_type_info chunk_info = {.alloc = alloc_chunk, .free = free_cb};
+    struct theft_run_config cfg = {
+        .name = "frame_roundtrip",
+        .prop2 = prop_roundtrip,
+        .type_info = {&msg_info, &chunk_info},
+        .trials = 1000,
+    };
+    enum theft_run_res res = theft_run(&cfg);
+    assert(res == THEFT_RUN_PASS);
+
+    printf("all tincan_frame tests passed\n");
+    return 0;
+}
