@@ -50,7 +50,7 @@
             pkgs.runCommand "markdownlint-check" { nativeBuildInputs = [ pkgs.markdownlint-cli2 ]; }
               ''
                 cd ${self}
-                markdownlint-cli2 "**/*.md" "#.direnv"
+                markdownlint-cli2 "**/*.md" "#.direnv" "#CHANGELOG.md"
                 touch $out
               '';
           nixfmt = pkgs.runCommand "nixfmt-check" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
