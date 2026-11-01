@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/hci.h>
 #include <zephyr/logging/log.h>
 #include <tincan/tincan.h>
 #include "tincan_gatt.h"
@@ -12,6 +13,7 @@ LOG_MODULE_REGISTER(tincan_gatt, CONFIG_ZMK_LOG_LEVEL);
 
 static struct {
     tincan_cb_t cb;
+    struct bt_conn *conn;
 } _tincan;
 
 void tincan_listen(tincan_cb_t cb) {
@@ -41,12 +43,43 @@ BT_GATT_SERVICE_DEFINE(tincan_svc, BT_GATT_PRIMARY_SERVICE(BT_UUID_TINCAN_SERVIC
                                               BT_GATT_PERM_WRITE, NULL, on_write, NULL),
                        BT_GATT_CCC(on_ccc_change, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), );
 
-int tincan_send(struct bt_conn *conn, const uint8_t *data, uint16_t len) {
-    if (!notify_enabled) {
+int tincan_speak(const void *payload, size_t length) {
+    if (!_tincan.conn || !notify_enabled) {
         return -EACCES;
     }
-    return bt_gatt_notify(conn, &tincan_svc.attrs[1], data, len);
+    return bt_gatt_notify(_tincan.conn, &tincan_svc.attrs[1], payload, length);
 }
+
+size_t tincan_mtu_size(void) { return _tincan.conn ? bt_gatt_get_mtu(_tincan.conn) : 0; }
+
+static void connected(struct bt_conn *conn, uint8_t err) {
+    if (err) {
+        LOG_ERR("%s: err = %d", __func__, err);
+        return;
+    }
+    struct bt_conn_info info;
+    bt_conn_get_info(conn, &info);
+    if (info.role != BT_CONN_ROLE_PERIPHERAL) {
+        LOG_WRN("connected, but role != peripheral, skipping");
+        return;
+    }
+    _tincan.conn = conn;
+}
+
+static void disconnected(struct bt_conn *conn, uint8_t reason) {
+    struct bt_conn_info info;
+    bt_conn_get_info(conn, &info);
+    if (info.role != BT_CONN_ROLE_PERIPHERAL) {
+        return;
+    }
+    LOG_INF("disconnected, reason %s (%d)", bt_hci_err_to_str(reason), reason);
+    _tincan.conn = NULL;
+}
+
+BT_CONN_CB_DEFINE(tincan_gatt_conn_callbacks) = {
+    .connected = connected,
+    .disconnected = disconnected,
+};
 
 #ifdef ZMK_TINCAN_PERIPHERAL_HEARTBEAT
 
