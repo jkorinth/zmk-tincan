@@ -30,13 +30,16 @@ static size_t tincan_rx_asm_len;
 
 static ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
                         uint16_t len, uint16_t offset, uint8_t flags) {
+    if (!_tincan.cb) {
+        return len; // nobody's listening, skip reassembling
+    }
     // shortcut: a peer that aborts mid-message leaves this stuck assembling
     // until the next message or a disconnect resets it (see tincan_frame.h).
     int ret = tincan_frame_reassemble(buf, len, tincan_rx_asm_buf, sizeof(tincan_rx_asm_buf),
                                       &tincan_rx_asm_len);
-    if (ret == -2) {
+    if (ret == TINCAN_FRAME_ERROR) {
         LOG_ERR("frame reassembly error, dropping message");
-    } else if (ret >= 0 && _tincan.cb) {
+    } else if (ret >= 0) {
         _tincan.cb(tincan_rx_asm_buf, ret);
     }
     return len;
@@ -62,9 +65,7 @@ int tincan_speak(const void *payload, size_t length) {
     }
 
     uint16_t mtu = bt_gatt_get_mtu(_tincan.conn);
-    if (!mtu) {
-        mtu = BT_ATT_DEFAULT_LE_MTU;
-    }
+    mtu = mtu ? mtu : BT_ATT_DEFAULT_LE_MTU;
     size_t max_chunk_payload = mtu - 3 - TINCAN_FRAME_HDR_LEN;
 
     uint8_t frame[TINCAN_FRAME_HDR_LEN + TINCAN_FRAME_MAX_MSG_LEN];

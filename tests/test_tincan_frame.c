@@ -66,7 +66,7 @@ static enum theft_trial_res prop_roundtrip(struct theft *t, void *arg1, void *ar
             return THEFT_TRIAL_FAIL;
         }
         done = tincan_frame_reassemble(frame, (uint16_t)n, asm_buf, sizeof(asm_buf), &asm_len);
-        if (more && done != -1) {
+        if (more && done != TINCAN_FRAME_INCOMPLETE) {
             return THEFT_TRIAL_FAIL; // completed too early
         }
         if (!more && done < 0) {
@@ -102,11 +102,11 @@ static void test_reassembly_overflow(void) {
     size_t asm_len = 0;
     uint8_t frame1[1 + 4] = {TINCAN_FRAME_MORE_FLAG, 1, 2, 3, 4};
     int r1 = tincan_frame_reassemble(frame1, sizeof(frame1), asm_buf, sizeof(asm_buf), &asm_len);
-    assert(r1 == -1);
+    assert(r1 == TINCAN_FRAME_INCOMPLETE);
 
     uint8_t frame2[1 + 1] = {0, 5}; // would push asm_len to 5 > cap 4
     int r2 = tincan_frame_reassemble(frame2, sizeof(frame2), asm_buf, sizeof(asm_buf), &asm_len);
-    assert(r2 == -2);
+    assert(r2 == TINCAN_FRAME_ERROR);
     assert(asm_len == 0);
 }
 
@@ -115,7 +115,7 @@ static void test_writer_out_cap_too_small(void) {
     size_t offset = 0;
     bool more;
     int n = tincan_frame_write_chunk(msg, sizeof(msg), &offset, 4, NULL, 0, &more);
-    assert(n == -1);
+    assert(n == TINCAN_FRAME_WRITE_ERROR);
 }
 
 int main(void) {
