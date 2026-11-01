@@ -18,7 +18,7 @@ We want to implement 2. in this feature.
 
 The framing header has reserved bits that we can use:
 
-```
+```text
 bit 7   bit 6..4               3..0
 More?   Channel index (0-7)    reserved
 [hdr u8][payload ...]
@@ -34,7 +34,7 @@ targets).
 Current idea is to use channel 0 as _control channel_: When a link
 comes up, each side sends a `HELLO` packet on channel 0:
 
-```
+```text
 [ver u8 = 1][flags u8][max_msg u16]
 ```
 
@@ -53,5 +53,3 @@ callbacks. Most zephyr-like approach: `TINCAN_LISTENER` macros.
 - listeners: stored in flash
 - downstream users: need to pick their channel; global config must
   somehow guarantee that they don't collide? TODO!
-
-

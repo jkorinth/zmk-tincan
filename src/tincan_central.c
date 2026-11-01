@@ -16,12 +16,12 @@
 LOG_MODULE_REGISTER(tincan, CONFIG_ZMK_LOG_LEVEL);
 
 static struct tincan_t {
-	struct bt_conn *conn;
-	struct bt_gatt_discover_params dis_params;
-	struct bt_gatt_subscribe_params sub_params;
-	struct bt_gatt_exchange_params exc_params;
-	uint16_t handle_char, handle_ccc;
-	uint16_t mtu;
+    struct bt_conn *conn;
+    struct bt_gatt_discover_params dis_params;
+    struct bt_gatt_subscribe_params sub_params;
+    struct bt_gatt_exchange_params exc_params;
+    uint16_t handle_char, handle_ccc;
+    uint16_t mtu;
 } _tincan;
 
 #define TINCAN_MSG_MAX_LEN 128
@@ -41,14 +41,14 @@ static bool tincan_tx_busy;
 static void tincan_tx_work_handler(struct k_work *work);
 K_WORK_DEFINE(tincan_tx_work, tincan_tx_work_handler);
 
-static void tincan_on_response(struct bt_conn *conn, uint8_t err, struct bt_gatt_write_params *params)
-{
-	if (err) {
-		LOG_ERR("%s: write failed: %s (%d)", __func__, bt_gatt_err_to_str(err), err);
-	}
-	LOG_DBG("%s: write successful", __func__);
-	tincan_tx_busy = false;
-	k_work_submit(&tincan_tx_work); // send the next queued message, if any
+static void tincan_on_response(struct bt_conn *conn, uint8_t err,
+                               struct bt_gatt_write_params *params) {
+    if (err) {
+        LOG_ERR("%s: write failed: %s (%d)", __func__, bt_gatt_err_to_str(err), err);
+    }
+    LOG_DBG("%s: write successful", __func__);
+    tincan_tx_busy = false;
+    k_work_submit(&tincan_tx_work); // send the next queued message, if any
 }
 
 static void tincan_tx_work_handler(struct k_work *work) {
