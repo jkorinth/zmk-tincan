@@ -9,7 +9,7 @@ int tincan_frame_write_chunk(const uint8_t *msg, size_t msg_len, size_t *offset,
     bool more = chunk < remaining;
 
     if (out_cap < TINCAN_FRAME_HDR_LEN + chunk) {
-        return -1;
+        return TINCAN_FRAME_WRITE_ERROR;
     }
 
     out[0] = more ? TINCAN_FRAME_MORE_FLAG : 0;
@@ -23,7 +23,7 @@ int tincan_frame_reassemble(const uint8_t *frame, uint16_t frame_len, uint8_t *a
                             size_t asm_cap, size_t *asm_len) {
     if (frame_len < TINCAN_FRAME_HDR_LEN) {
         *asm_len = 0;
-        return -2;
+        return TINCAN_FRAME_ERROR;
     }
 
     bool more = frame[0] & TINCAN_FRAME_MORE_FLAG;
@@ -31,14 +31,14 @@ int tincan_frame_reassemble(const uint8_t *frame, uint16_t frame_len, uint8_t *a
 
     if (*asm_len + payload_len > asm_cap) {
         *asm_len = 0;
-        return -2;
+        return TINCAN_FRAME_ERROR;
     }
 
     memcpy(asm_buf + *asm_len, frame + TINCAN_FRAME_HDR_LEN, payload_len);
     *asm_len += payload_len;
 
     if (more) {
-        return -1;
+        return TINCAN_FRAME_INCOMPLETE;
     }
 
     int complete_len = (int)*asm_len;

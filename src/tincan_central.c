@@ -175,13 +175,16 @@ static uint8_t tincan_on_notify(struct bt_conn *conn, struct bt_gatt_subscribe_p
         return BT_GATT_ITER_STOP;
     }
     LOG_DBG("%s: on_notify called: %u bytes data", __func__, length);
+    if (!_tincan.cb) {
+        return BT_GATT_ITER_CONTINUE; // nobody's listening, skip reassembling
+    }
     // shortcut: a peer that aborts mid-message leaves this stuck assembling
     // until the next message or a disconnect resets it (see tincan_frame.h).
     int ret = tincan_frame_reassemble(data, length, tincan_rx_asm_buf, sizeof(tincan_rx_asm_buf),
                                       &tincan_rx_asm_len);
-    if (ret == -2) {
+    if (ret == TINCAN_FRAME_ERROR) {
         LOG_ERR("frame reassembly error, dropping message");
-    } else if (ret >= 0 && _tincan.cb) {
+    } else if (ret >= 0) {
         _tincan.cb(tincan_rx_asm_buf, ret);
     }
     return BT_GATT_ITER_CONTINUE;
