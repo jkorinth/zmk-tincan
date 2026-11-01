@@ -1,7 +1,7 @@
 #include "tincan_frame.h"
 #include <string.h>
 
-int tincan_frame_write_chunk(const uint8_t *msg, size_t msg_len, size_t *offset,
+int tincan_frame_write_chunk(uint8_t channel, const uint8_t *msg, size_t msg_len, size_t *offset,
                              size_t max_chunk_payload, uint8_t *out, size_t out_cap,
                              bool *more_out) {
     size_t remaining = msg_len - *offset;
@@ -12,7 +12,8 @@ int tincan_frame_write_chunk(const uint8_t *msg, size_t msg_len, size_t *offset,
         return TINCAN_FRAME_WRITE_ERROR;
     }
 
-    out[0] = more ? TINCAN_FRAME_MORE_FLAG : 0;
+    out[0] = (more ? TINCAN_FRAME_MORE_FLAG : 0) |
+             ((channel & TINCAN_FRAME_CHANNEL_MASK) << TINCAN_FRAME_CHANNEL_SHIFT);
     memcpy(out + TINCAN_FRAME_HDR_LEN, msg + *offset, chunk);
     *offset += chunk;
     *more_out = more;
@@ -20,13 +21,21 @@ int tincan_frame_write_chunk(const uint8_t *msg, size_t msg_len, size_t *offset,
 }
 
 int tincan_frame_reassemble(const uint8_t *frame, uint16_t frame_len, uint8_t *asm_buf,
-                            size_t asm_cap, size_t *asm_len) {
+                            size_t asm_cap, size_t *asm_len, uint8_t *channel) {
     if (frame_len < TINCAN_FRAME_HDR_LEN) {
         *asm_len = 0;
         return TINCAN_FRAME_ERROR;
     }
 
     bool more = frame[0] & TINCAN_FRAME_MORE_FLAG;
+    uint8_t ch = (frame[0] >> TINCAN_FRAME_CHANNEL_SHIFT) & TINCAN_FRAME_CHANNEL_MASK;
+    if (*asm_len == 0) {
+        *channel = ch;
+    } else if (ch != *channel) {
+        *asm_len = 0; // a fragment from a different channel interrupted this message
+        return TINCAN_FRAME_ERROR;
+    }
+
     size_t payload_len = frame_len - TINCAN_FRAME_HDR_LEN;
 
     if (*asm_len + payload_len > asm_cap) {

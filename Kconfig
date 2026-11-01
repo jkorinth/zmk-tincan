@@ -6,4 +6,12 @@ menuconfig ZMK_TINCAN
 
 if ZMK_TINCAN
 
+config ZMK_TINCAN_MAX_MSG_LEN
+	int "Maximum reassembled message size, in bytes"
+	default 128
+
+config ZMK_TINCAN_TX_QUEUE_DEPTH
+	int "Depth of the central-side outgoing message queue"
+	default 8
+
 endif # ZMK_TINCAN

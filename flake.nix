@@ -67,7 +67,7 @@
                 ];
               }
               ''
-                gcc -std=c11 -Wall -Wextra -Werror -o frame_test ${self}/tests/test_tincan_frame.c ${self}/src/tincan_frame.c -ltheft -lm
+                gcc -std=c11 -Wall -Wextra -Werror -I${self}/include -o frame_test ${self}/tests/test_tincan_frame.c ${self}/src/tincan_frame.c ${self}/src/tincan_dispatch.c ${self}/src/tincan_hello.c -ltheft -lm
                 ./frame_test
                 touch $out
               '';
