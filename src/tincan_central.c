@@ -81,7 +81,7 @@ static void tincan_tx_work_handler(struct k_work *work) {
         tincan_tx_in_progress = true;
     }
 
-    uint16_t mtu = _tincan.mtu ? _tincan.mtu : BT_ATT_DEFAULT_LE_MTU;
+    uint16_t mtu = _tincan.mtu ? _tincan.mtu : TINCAN_ATT_DEFAULT_LE_MTU;
     size_t max_chunk_payload = mtu - 3 - TINCAN_FRAME_HDR_LEN;
     bool more;
     int n = tincan_frame_write_chunk(tincan_tx_current.channel, tincan_tx_current.data,
