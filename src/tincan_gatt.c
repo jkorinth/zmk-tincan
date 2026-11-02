@@ -91,7 +91,7 @@ int tincan_speak(uint8_t channel, const void *payload, size_t length) {
     }
 
     uint16_t mtu = bt_gatt_get_mtu(_tincan.conn);
-    mtu = mtu ? mtu : BT_ATT_DEFAULT_LE_MTU;
+    mtu = mtu ? mtu : TINCAN_ATT_DEFAULT_LE_MTU;
     size_t max_chunk_payload = mtu - 3 - TINCAN_FRAME_HDR_LEN;
 
     uint8_t frame[TINCAN_FRAME_HDR_LEN + TINCAN_FRAME_MAX_MSG_LEN];

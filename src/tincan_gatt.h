@@ -1,6 +1,11 @@
 #pragma once
 #include <zephyr/bluetooth/uuid.h>
 
+// Zephyr's BT_ATT_DEFAULT_LE_MTU (23, Core spec Vol 3, Part F, 3.2.8) lives in
+// subsys/bluetooth/host/att_internal.h, which modules can't include -- so we
+// keep our own copy of the spec constant here.
+#define TINCAN_ATT_DEFAULT_LE_MTU 23
+
 #define BT_UUID_TINCAN_SERVICE_VAL                                                                 \
     BT_UUID_128_ENCODE(0x0d7b344c, 0x9979, 0x11f1, 0xad10, 0xb89a2a6e9420)
 
