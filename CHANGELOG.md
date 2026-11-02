@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/jkorinth/zmk-tincan/compare/v1.0.0...v1.0.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **tincan:** replace undeclared BT_ATT_DEFAULT_LE_MTU with local constant ([356d319](https://github.com/jkorinth/zmk-tincan/commit/356d31900cb3eb719c83311af340e9d64804d654))
+
 ## 1.0.0 (2026-11-01)
 
 
