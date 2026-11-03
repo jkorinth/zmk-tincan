@@ -335,6 +335,12 @@ static void connected(struct bt_conn *conn, uint8_t err) {
             return;
         }
         _tincan.conn = conn;
+#ifdef ZMK_TINCAN_DEBUG_SEND
+        // repro aid: fire before HELLO is enqueued (tincan_discover_ccc_cb,
+        // after the 4s discovery delay below) to land ahead of it in the tx
+        // queue — see docs/06_simulation-testing.md's head-of-line-block case.
+        k_work_schedule(&debug_send_work, K_NO_WAIT);
+#endif
         k_work_schedule(&discovery, K_SECONDS(4));
     } else {
         LOG_ERR("%s: err = %d", __func__, err);
