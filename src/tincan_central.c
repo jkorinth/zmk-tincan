@@ -28,6 +28,10 @@ static struct tincan_t {
     uint16_t mtu;
 } _tincan;
 
+// avoids a dangling-pointer bug; see docs/06_simulation-testing.md
+static const struct bt_uuid_16 tincan_ccc_uuid = BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
+static const struct bt_uuid_128 tincan_service_uuid = BT_UUID_INIT_128(BT_UUID_TINCAN_SERVICE_VAL);
+
 struct tincan_msg {
     uint8_t channel;
     uint8_t data[TINCAN_FRAME_MAX_MSG_LEN];
@@ -263,7 +267,7 @@ static uint8_t tincan_discover_chrc_cb(struct bt_conn *conn, const struct bt_gat
     _tincan.handle_char = chrc->value_handle;
     LOG_INF("tincan char found, value handle %u", attr->handle);
 
-    _tincan.dis_params.uuid = BT_UUID_GATT_CCC;
+    _tincan.dis_params.uuid = (const struct bt_uuid *)&tincan_ccc_uuid;
     _tincan.dis_params.start_handle = attr->handle + 2;
     _tincan.dis_params.end_handle = 0xffff;
     _tincan.dis_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
@@ -292,8 +296,8 @@ static uint8_t tincan_discover_svc_cb(struct bt_conn *conn, const struct bt_gatt
         LOG_INF("tincan service found!!");
     }
 
-    // TODO weird - this should work like above? find out why not
-    _tincan.dis_params.uuid = NULL; // BT_UUID_TINCAN_CHAR;
+    // same dangling-pointer trap as tincan_ccc_uuid; see docs/06_simulation-testing.md
+    _tincan.dis_params.uuid = NULL;
     _tincan.dis_params.start_handle = attr->handle + 1;
     _tincan.dis_params.end_handle = 0xffff;
     _tincan.dis_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
@@ -303,11 +307,11 @@ static uint8_t tincan_discover_svc_cb(struct bt_conn *conn, const struct bt_gatt
     if (err) {
         LOG_ERR("characteristic discover failed (%d)", err);
     }
-    return BT_GATT_ITER_CONTINUE;
+    return BT_GATT_ITER_STOP;
 }
 
 void tincan_start_discovery(struct bt_conn *conn) {
-    _tincan.dis_params.uuid = BT_UUID_TINCAN_SERVICE;
+    _tincan.dis_params.uuid = (const struct bt_uuid *)&tincan_service_uuid;
     _tincan.dis_params.func = tincan_discover_svc_cb;
     _tincan.dis_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
     _tincan.dis_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
@@ -336,9 +340,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         }
         _tincan.conn = conn;
 #ifdef ZMK_TINCAN_DEBUG_SEND
-        // repro aid: fire before HELLO is enqueued (tincan_discover_ccc_cb,
-        // after the 4s discovery delay below) to land ahead of it in the tx
-        // queue — see docs/06_simulation-testing.md's head-of-line-block case.
+        // repro aid; see docs/06_simulation-testing.md
         k_work_schedule(&debug_send_work, K_NO_WAIT);
 #endif
         k_work_schedule(&discovery, K_SECONDS(4));
