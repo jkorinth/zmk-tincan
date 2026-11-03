@@ -2,15 +2,26 @@
   description = "zmk-tincan dev shell and lint checks";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.zephyr-nix.url = "github:nix-community/zephyr-nix";
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      zephyr-nix,
+    }:
     let
       systems = [
         "x86_64-linux"
         "aarch64-linux"
         "x86_64-darwin"
         "aarch64-darwin"
+      ];
+      # BabbleSim/nrf52_bsim need a 32-bit host toolchain (pkgsi686Linux),
+      # which nixpkgs only provides on Linux.
+      linuxSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
       cSources = "src/*.c src/*.h include/tincan/*.h";
@@ -33,6 +44,33 @@
             ];
           };
         }
+        // nixpkgs.lib.optionalAttrs (builtins.elem system linuxSystems) (
+          let
+            # pinned to zephyr-nix's own nixpkgs; see docs/06_simulation-testing.md
+            zPkgs = zephyr-nix.inputs.nixpkgs.legacyPackages.${system};
+          in
+          {
+            sim = zPkgs.mkShell {
+              # pkgsi686Linux.stdenv.cc first on PATH; see docs/06_simulation-testing.md
+              packages = [
+                zPkgs.pkgsi686Linux.stdenv.cc
+                zephyr-nix.packages.${system}.pythonEnv
+                zPkgs.cmake
+                zPkgs.ninja
+                zPkgs.dtc
+                zPkgs.gperf
+                zPkgs.ccache
+                zPkgs.git
+                zPkgs.gcc
+              ];
+              # CC32/CC64 as absolute paths for BabbleSim's own Makefiles
+              shellHook = ''
+                export CC32=${zPkgs.pkgsi686Linux.stdenv.cc}/bin/gcc
+                export CC64=${zPkgs.gcc}/bin/gcc
+              '';
+            };
+          }
+        )
       );
 
       checks = forAllSystems (
