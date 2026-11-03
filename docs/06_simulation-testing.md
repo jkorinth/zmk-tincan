@@ -123,3 +123,71 @@ whether it reliably does, or whether the queue can fill to
   every run — CMake caches `CMAKE_C_COMPILER` on first configure and
   won't reconsider it just because the toolchain changed underneath a
   cached workspace.
+
+## Resolution
+
+Harness confirmed working end-to-end (real ZMK + Zephyr via `zephyr-nix`,
+BabbleSim built from the `tools/bsim` west group, `nrf52_bsim` central +
+split-peripheral images). Along the way it surfaced a pre-existing bug
+nothing had ever caught, since this repo had zero `west build` coverage
+before now (a second one, `BT_ATT_DEFAULT_LE_MTU` being a Zephyr-internal
+symbol not on the public API, was found and fixed independently on `main`
+while this harness was being built — see `fix/undeclared-att-default-mtu`):
+
+- `tincan_discover_ccc_cb` (`tincan_central.c`) never found the CCC
+  descriptor — discovery always hit the `!attr` ("stopping discovery
+  ccc") branch, so `bt_gatt_subscribe` was never called and the peripheral
+  never saw a CCC write. Root cause, confirmed by instrumenting Zephyr's
+  own `gatt_find_info_rsp` and tracing the raw ATT PDUs in BabbleSim's
+  captured log: `BT_UUID_GATT_CCC` (`zephyr/bluetooth/uuid.h`) expands to
+  a **compound literal**, which has storage tied to the *calling
+  function's stack frame*. `tincan_discover_chrc_cb` stored its pointer
+  into the long-lived `_tincan.dis_params.uuid` and returned — CCC
+  discovery is asynchronous (the response arrives ~16ms later), so by the
+  time `gatt_find_info_rsp` dereferenced that pointer to filter the
+  response, it was reading stale stack memory. The peripheral's own trace
+  shows it genuinely returned the CCC at handle `0x0023`; the client just
+  failed to recognize it. Fixed with a `static const struct bt_uuid_16`
+  instance instead of the macro. This also explains the long-standing
+  `// TODO weird` comment on the characteristic-discovery step right
+  above it: `BT_UUID_TINCAN_CHAR` is the same kind of compound literal,
+  and characteristic discovery is *also* filtered client-side,
+  asynchronously — the exact same trap, just never root-caused. The
+  existing `uuid = NULL` + manual-compare workaround there is fine as-is
+  (`BT_UUID_TINCAN_CHAR` is only ever dereferenced synchronously, inside
+  that same callback) and wasn't changed.
+- A third site had the identical trap, just dormant: `tincan_start_discovery`
+  stored `BT_UUID_TINCAN_SERVICE` in `dis_params.uuid` the same way. The
+  outgoing primary-service request does consume it synchronously (it's
+  encoded into the request bytes before `bt_gatt_discover()` returns,
+  which is genuinely safe) — but Zephyr's response handler
+  (`gatt_find_type_rsp`) *also* copies `params->uuid` into the
+  `bt_gatt_service_val` it hands back, asynchronously, after the
+  function that created the compound literal has returned. Harmless only
+  because `tincan_discover_svc_cb` never reads that field — fixed the
+  same way (`static const struct bt_uuid_128`) rather than leave a second
+  landmine with the same shape as the one this harness just spent a
+  while root-causing.
+- `tincan_discover_svc_cb` also returned `BT_GATT_ITER_CONTINUE` after
+  already relaunching discovery on the shared `_tincan.dis_params` for the
+  next step — harmless here (there's only one tincan service to find) but
+  a latent hazard (Zephyr still considers the outer search "continuing"
+  while the struct backing it gets reused for an unrelated request).
+  Changed to `BT_GATT_ITER_STOP` as a defensive fix; this was the initial,
+  disproven hypothesis for the CCC failure (ruled out by rerunning the
+  harness with just this change — CCC discovery still failed identically).
+
+With both central-side bugs fixed, the queue-block bug (the original
+report) no longer reproduces. Before the fix: 8 `tincan_speak()` calls
+enqueue fine, then at `t=40.852s` the 9th hits
+`CONFIG_ZMK_TINCAN_TX_QUEUE_DEPTH` and the queue starts permanently
+dropping every message, every 5s, for the rest of the run. After: CCC
+found, subscribed, the peripheral's `HELLO` notify arrives at the central
+(`tincan_on_notify: ... 5 bytes data`), and all 10 `tincan_speak()` calls
+across the 50s run succeed — no `tincan tx queue full` at all. The
+`tincan_tx_work_handler` head-of-line-blocking design (`docs/`'s original
+concern) was real, but never got a chance to matter on its own: CCC
+discovery failing meant `HELLO` could never arrive in the first place.
+Whether that design still deserves hardening (e.g. letting control-channel
+messages jump the queue, or timing out a stuck non-control message) is a
+separate, follow-up question now that the actual trigger is fixed.
