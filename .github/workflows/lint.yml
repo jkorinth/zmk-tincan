@@ -18,3 +18,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - run: nix build '.#checks.x86_64-linux.frame-test' -L
+
+  bsim-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      # West workspace (zmk+zephyr+babblesim group) and the built BabbleSim
+      # binaries, cached across runs — see docs/06_simulation-testing.md.
+      # Keyed on sim/run-ci.sh (pinned ZMK_REV, BabbleSim patches) and
+      # flake.lock (toolchain versions) — bumping either invalidates the
+      # cache, since the cached binaries are toolchain-ABI-specific.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../zmk-tincan-sim-workspace
+          key: bsim-workspace-${{ hashFiles('sim/run-ci.sh', 'flake.lock') }}
+      - run: nix develop '.#sim' --command bash sim/run-ci.sh
