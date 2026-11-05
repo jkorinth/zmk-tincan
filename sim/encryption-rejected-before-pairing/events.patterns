@@ -1,0 +1,2 @@
+s/^d_00: @[0-9:.]+  \[[0-9:,.]+\] <(inf|err)> tincan: (.*)$/central \2/p
+s/^d_02: @[0-9:.]+  \[[0-9:,.]+\] <(inf|err)> tincan_gatt: (.*)$/peripheral \2/p

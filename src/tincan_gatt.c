@@ -65,7 +65,7 @@ static void on_ccc_change(const struct bt_gatt_attr *attr, uint16_t value) {
 BT_GATT_SERVICE_DEFINE(tincan_svc, BT_GATT_PRIMARY_SERVICE(BT_UUID_TINCAN_SERVICE),
                        BT_GATT_CHARACTERISTIC(BT_UUID_TINCAN_CHAR,
                                               BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
-                                              BT_GATT_PERM_WRITE, NULL, on_write, NULL),
+                                              BT_GATT_PERM_WRITE_ENCRYPT, NULL, on_write, NULL),
                        BT_GATT_CCC(on_ccc_change, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), );
 
 int tincan_speak(uint8_t channel, const void *payload, size_t length) {

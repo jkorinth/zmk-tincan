@@ -61,8 +61,9 @@ static void tincan_on_response(struct bt_conn *conn, uint8_t err,
                                struct bt_gatt_write_params *params) {
     if (err) {
         LOG_ERR("%s: write failed: %s (%d)", __func__, bt_gatt_err_to_str(err), err);
+    } else {
+        LOG_DBG("%s: write successful", __func__);
     }
-    LOG_DBG("%s: write successful", __func__);
     tincan_tx_busy = false;
     k_work_submit(&tincan_tx_work); // send the next queued message, if any
 }

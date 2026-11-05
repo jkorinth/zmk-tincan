@@ -33,4 +33,4 @@ jobs:
         with:
           path: ${{ github.workspace }}/../zmk-tincan-sim-workspace
           key: bsim-workspace-${{ hashFiles('sim/run-ci.sh', 'flake.lock') }}
-      - run: nix develop '.#sim' --command bash sim/run-ci.sh
+      - run: nix develop '.#sim' --command bash sim/run-ci.sh sim/queue-block-repro sim/encryption-rejected-before-pairing

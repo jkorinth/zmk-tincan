@@ -1,0 +1,1 @@
+./tests_ble_encryption-rejected-before-pairing_peripheral.exe -d=2
