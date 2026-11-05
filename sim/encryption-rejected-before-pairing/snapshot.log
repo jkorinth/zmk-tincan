@@ -1,0 +1,36 @@
+peripheral tincan service registered, 4 attrs, char uuid in db
+central writing payload to peripheral
+central wrote payload: 0
+central tincan service found!!
+central tincan char found, value handle 33
+central tincan CCC found, handle 0x0023
+central subscribe success!
+central tincan_on_response: write failed:  (5)
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
+central writing payload to peripheral
+central wrote payload: 0
+central tincan_on_response: write failed:  (5)
