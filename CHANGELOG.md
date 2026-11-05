@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/jkorinth/zmk-tincan/compare/v1.0.1...v1.1.0) (2026-11-05)
+
+
+### Features
+
+* **sim:** add BabbleSim test harness ([3f475ce](https://github.com/jkorinth/zmk-tincan/commit/3f475ce9c0400ce9f19ffecf926cf70babc52289))
+
+
+### Bug Fixes
+
+* **tincan:** stop storing compound-literal UUIDs in dis_params ([c68bb70](https://github.com/jkorinth/zmk-tincan/commit/c68bb70e25969e16182f73150028b76ad84abc2b))
+
 ## [1.0.1](https://github.com/jkorinth/zmk-tincan/compare/v1.0.0...v1.0.1) (2026-11-02)
 
 
